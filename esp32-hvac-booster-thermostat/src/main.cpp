@@ -1,6 +1,11 @@
 #include <Arduino.h>
+#include <Wire.h>
 #include <HomeSpan.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <math.h>
 #include <DEV_TMO.h>
+
 
 
 void setup() {
@@ -17,11 +22,8 @@ void setup() {
     new DEV_Thermostat();
 
   homeSpan.setLogLevel(0);
-
 }
 
 void loop() {
   homeSpan.poll();
 }
-
-
