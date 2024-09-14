@@ -107,7 +107,7 @@ struct DEV_Thermostat : Service::Thermostat {
             prevModeState = false;
         }
 
-        if (thisCurrentHeatingCoolingState->getVal() == OFF) {
+        if (thisTargetHeatingCoolingState->getVal() == OFF) {
             return; // do not respond to button presses when system is off
         }
 
