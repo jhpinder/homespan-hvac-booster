@@ -1,3 +1,10 @@
+#include <HomeSpan.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <DHTesp.h>
+
+#define MOCK 0
+
 Adafruit_SSD1306 display(128, 32, &Wire, -1);
 
 enum Modes {
@@ -12,6 +19,7 @@ struct DEV_Thermostat : Service::Thermostat {
     SpanCharacteristic *thisCurrentTemperature;
     SpanCharacteristic *thisTargetTemperature;
     SpanCharacteristic *thisTemperatureDisplayUnits;
+    SpanCharacteristic *thisCurrentRelativeHumidity;
 
     uint32_t calibrateTime = 0;
     const float increment = (float) 5 / (float) 9;
@@ -27,8 +35,21 @@ struct DEV_Thermostat : Service::Thermostat {
     bool prevDownState = false;
     bool prevModeState = false;
 
-    long showModeDuration = 1500;
-    long prevShowModeUntilMillis = 0;
+    unsigned long showModeDuration = 1500;
+    unsigned long prevShowModeUntilMillis;
+
+    unsigned long dimTimeout = 30000;
+    unsigned long prevDimMillis = 0;
+
+    DHTesp tempSensor;
+    uint16_t tempSensorPin = GPIO_NUM_25;
+    unsigned long tempDelay = 5000;
+    unsigned long lastTempReadTime;
+    float maxTempDelta = (float) 3.0;
+    const long minFanSpeed = 10;
+
+    float mockTemp = (float) 10;
+    float mockTempIncrement = (float) 5 / (float) 9;
 
     DEV_Thermostat() {
         thisCurrentHeatingCoolingState = new Characteristic::CurrentHeatingCoolingState();
@@ -36,18 +57,23 @@ struct DEV_Thermostat : Service::Thermostat {
         thisCurrentTemperature = new Characteristic::CurrentTemperature();
         thisTargetTemperature = new Characteristic::TargetTemperature ();
         thisTemperatureDisplayUnits = new Characteristic::TemperatureDisplayUnits();
-
+        thisCurrentRelativeHumidity = new Characteristic::CurrentRelativeHumidity();
         
-        if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+        if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
             Serial.println(F("SSD1306 allocation failed"));
         }
 
-        thisTargetTemperature->setVal(20);
-        thisCurrentTemperature->setVal(30);
+        thisTargetTemperature->setVal((float) 22.222);
         thisTargetHeatingCoolingState->setValidValues(3, 0, 1, 2);
         thisTemperatureDisplayUnits->setVal(1);
 
-        fanController = new SpanPoint(fanControllerMacAddress, sizeof(int), sizeof(int));
+        fanController = new SpanPoint(fanControllerMacAddress, sizeof(float), sizeof(int));
+
+        tempSensor.setup(tempSensorPin, DHTesp::DHT22); 
+        pinMode(GPIO_NUM_26, OUTPUT);
+        pinMode(GPIO_NUM_33, OUTPUT);
+        digitalWrite(GPIO_NUM_26, HIGH);
+        digitalWrite(GPIO_NUM_33, LOW);
 
         pinMode(upPin, INPUT_PULLUP);
         pinMode(downPin, INPUT_PULLUP);
@@ -60,31 +86,22 @@ struct DEV_Thermostat : Service::Thermostat {
         if (fanController->get(&receivedData)) {
             Serial.printf("Received from fan controller: %i\n", receivedData);
         }
+        readTempSensor();
         readSwitches();
-
         updateDisplay();
     }
 
     boolean update() {
         if (thisTargetHeatingCoolingState->updated()) {
-            Serial.print("Updated target heating cooling state to ");
-            Serial.println(thisTargetHeatingCoolingState->getNewVal());
             prevShowModeUntilMillis = millis();
         }
         if (thisTargetTemperature->updated()) {
             Serial.print("Updated target temperature to ");
             Serial.println(thisTargetTemperature->getNewVal<float>());
-            
-            float toSend = thisTargetTemperature->getNewVal<float>();
-            boolean success = fanController->send(&toSend);
-            if (success) {
-                Serial.print("Sent to fan controller float: ");
-                Serial.println(toSend);
-            } else {
-                Serial.println("Failed to send to fan controller!");
-            }
 
-            thisCurrentTemperature->setVal<float>(thisTargetTemperature->getNewVal<float>() + 5);
+            if (MOCK) {
+                thisCurrentTemperature->setVal<float>(thisTargetTemperature->getNewVal<float>() + 5);
+            }
         }
         return true;
     }
@@ -101,14 +118,14 @@ struct DEV_Thermostat : Service::Thermostat {
                 }            
             }
             prevModeState = true;
-            prevShowModeUntilMillis = millis();
+            prevShowModeUntilMillis = prevDimMillis = millis();
             delay(debounceTime);
         } else {
             prevModeState = false;
         }
 
         if (thisTargetHeatingCoolingState->getVal() == OFF) {
-            return; // do not respond to button presses when system is off
+            return; // do not respond to temperature set button presses when system is off
         }
 
         readValue = digitalRead(upPin);
@@ -118,6 +135,7 @@ struct DEV_Thermostat : Service::Thermostat {
                 thisTargetTemperature->setVal<float>(newTemp);
                 Serial.printf("Up button pressed, new temp: %f\n", newTemp);
             }
+            prevDimMillis = millis();
             prevUpState = true;
             delay(debounceTime);
         } else {
@@ -131,6 +149,7 @@ struct DEV_Thermostat : Service::Thermostat {
                 Serial.printf("Down button pressed, new temp: %f\n", newTemp);
                 thisTargetTemperature->setVal<float>(newTemp);
             }
+            prevDimMillis = millis();
             prevDownState = true;
             delay(debounceTime);
         } else {
@@ -187,6 +206,86 @@ struct DEV_Thermostat : Service::Thermostat {
             display.setTextSize(1);
             display.print(F("o"));
         }
+
+        display.dim(millis() - prevDimMillis > dimTimeout) ;
         display.display();
+    }
+
+    void readTempSensor() {
+        if (millis() - lastTempReadTime > tempDelay) {
+            Serial.println("Reading temp and humidity");
+
+            TempAndHumidity tempAndHumidity = tempSensor.getTempAndHumidity();
+            if (isnan(tempAndHumidity.humidity) || isnan(tempAndHumidity.temperature)) {
+                Serial.println("Failed to read from DHT sensor!");
+            } else {
+                float temp = tempAndHumidity.temperature * (float) 9.0 / (float) 5.0 + (float) 32.0;
+                Serial.printf("Temp: %fF\nHumidity: %f%\n", temp, tempAndHumidity.humidity);
+                thisCurrentTemperature->setVal(tempAndHumidity.temperature);
+                thisCurrentRelativeHumidity->setVal(tempAndHumidity.humidity);
+            }
+
+            lastTempReadTime = millis();
+            sendFanSpeed();
+
+            if (MOCK) {
+                if (mockTemp > 30) {
+                    mockTemp = 10;
+                } else {
+                    mockTemp += mockTempIncrement;
+                }   
+                thisCurrentTemperature->setVal(mockTemp);     
+            }
+        }
+    }
+
+    void sendFanSpeed() {
+        float toSend;
+        switch (thisTargetHeatingCoolingState->getVal()) {
+
+            case OFF:
+            default:
+                toSend = 0;
+                break;
+
+            case COOLING:
+
+                toSend = mapFloat(
+                    thisCurrentTemperature->getVal(),
+                    thisTargetTemperature->getVal(),
+                    thisTargetTemperature->getVal() + maxTempDelta,
+                    minFanSpeed,
+                    100
+                    );
+
+                break;
+
+            case HEATING:
+
+                toSend = mapFloat(
+                    thisCurrentTemperature->getVal(),
+                    thisTargetTemperature->getVal(),
+                    thisTargetTemperature->getVal() - maxTempDelta,
+                    minFanSpeed,
+                    100
+                    );
+ 
+                break;
+        }
+
+        Serial.printf("Sending fan speed %f to fan controller...\n", toSend);
+        boolean success = fanController->send(&toSend);
+        if (success) {
+            Serial.printf("Sent to fan controller fan speed: %f\n", toSend);
+        } else {
+            Serial.println("Failed to send to fan controller!");
+        }
+    }
+
+    float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
+        const float run = in_max - in_min;
+        const float rise = out_max - out_min;
+        const float delta = x - in_min;
+        return (delta * rise) / run + out_min;
     }
 };
