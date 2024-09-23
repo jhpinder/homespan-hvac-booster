@@ -13,7 +13,7 @@ int dutyCycle = 100;
 
 const char* thermostatMacAddress = "C8:2E:18:26:BE:00";
 SpanPoint *thermostat;
-uint32_t calibrateTime=0;
+uint32_t calibrateTime = 0;
 
 void setup() {
   delay(2000);
