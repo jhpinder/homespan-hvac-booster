@@ -1,12 +1,12 @@
 #include <Arduino.h>
 #include <HomeSpan.h>
 
-#define CALIBRATION_PERIOD   10
+#define CALIBRATION_PERIOD 10
 
 const float frequency = 1250.0f;
 const int channel = 0;
 const int bitDepth = 8;
-const int maxVal = 255;
+const int maxPwmVal = (1 << bitDepth) - 1;
 const uint8_t pinToUse = 15;
 
 int dutyCycle = 100;
@@ -31,16 +31,16 @@ void setup() {
 void loop() {
   float fanSpeed;
   if (thermostat->get(&fanSpeed)) {
-    Serial.printf("Received float: %f\n",fanSpeed);
-    dutyCycle = map(fanSpeed, 100, 0, 0, maxVal);
+    Serial.printf("Received float: %f\n", fanSpeed);
+    dutyCycle = constrain(map(fanSpeed, 100, 0, 0, maxPwmVal), 0, maxPwmVal);
     ledcWrite(channel, dutyCycle);
     Serial.printf("Set duty cycle to: %i\n", dutyCycle);
   }
-  
+
   if (millis() > calibrateTime) {
     int toSend = rand();
     boolean success = thermostat->send(&toSend);
     Serial.printf("Send int %d %s\n", toSend, success ? "Succeded" : "Failed");
-    calibrateTime=millis() + CALIBRATION_PERIOD*1000;
+    calibrateTime = millis() + CALIBRATION_PERIOD * 1000;
   }
 }
