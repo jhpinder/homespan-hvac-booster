@@ -1,0 +1,6 @@
+{
+    "retrievalIntervalInMinutes": 5,
+    "minimumFanSpeed": 10,
+    "maxCoolingTempDelta": 3,
+    "maxHeatingTempDelta": 6
+}
