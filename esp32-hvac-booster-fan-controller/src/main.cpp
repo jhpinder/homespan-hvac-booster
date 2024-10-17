@@ -7,7 +7,7 @@ const float frequency = 1250.0f;
 const int channel = 0;
 const int bitDepth = 8;
 const int maxPwmVal = (1 << bitDepth) - 1;
-const uint8_t pinToUse = 15;
+const uint8_t fanPwmPin = GPIO_NUM_13;
 
 int dutyCycle = 100;
 
@@ -23,7 +23,7 @@ void setup() {
   thermostat = new SpanPoint(thermostatMacAddress, sizeof(int), sizeof(float));
 
   ledcSetup(channel, frequency, bitDepth);
-  ledcAttachPin(pinToUse, channel);
+  ledcAttachPin(fanPwmPin, channel);
 
   homeSpan.setLogLevel(0);
 }
@@ -32,7 +32,7 @@ void loop() {
   float fanSpeed;
   if (thermostat->get(&fanSpeed)) {
     Serial.printf("Received float: %f\n", fanSpeed);
-    dutyCycle = constrain(map(fanSpeed, 100, 0, 0, maxPwmVal), 0, maxPwmVal);
+    dutyCycle = map(constrain(fanSpeed, 0, maxPwmVal), 100, 0, 0, maxPwmVal);
     ledcWrite(channel, dutyCycle);
     Serial.printf("Set duty cycle to: %i\n", dutyCycle);
   }

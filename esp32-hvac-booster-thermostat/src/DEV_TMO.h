@@ -2,8 +2,13 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <DHTesp.h>
+#include <ArduinoHttpClient.h>
+#include <ArduinoJson.h>
+#include <ESPmDNS.h>
 
 #define MOCK 0
+#define USE_CONFIG_SERVER 0
+#define SERVER_RETRIES 10
 
 Adafruit_SSD1306 display(128, 32, &Wire, -1);
 
@@ -26,6 +31,11 @@ struct DEV_Thermostat : Service::Thermostat {
     const char* fanControllerMacAddress = "C8:2E:18:26:AE:84";
     SpanPoint *fanController;
 
+    const char* configServerName = "studio-mac-mini.local";
+    const char* configEndpoint = "/hvac-booster/config/office.json";
+    int retrievalIntervalInMinutes = 0;
+    unsigned long prevRetrievalTime = 0;
+
     const int upPin = GPIO_NUM_13;
     const int downPin = GPIO_NUM_12;
     const int modePin = GPIO_NUM_14;
@@ -45,8 +55,9 @@ struct DEV_Thermostat : Service::Thermostat {
     uint16_t tempSensorPin = GPIO_NUM_25;
     unsigned long tempDelay = 5000;
     unsigned long lastTempReadTime;
-    float maxTempDelta = (float) 3.0;
-    const long minFanSpeed = 10;
+    float maxCoolingTempDelta = 2.5;
+    float maxHeatingTempDelta = 5.0;
+    long minimumFanSpeed = 15;
 
     float mockTemp = (float) 10;
     float mockTempIncrement = (float) 5 / (float) 9;
@@ -82,6 +93,22 @@ struct DEV_Thermostat : Service::Thermostat {
     }
 
     virtual void loop() override {
+
+        if (USE_CONFIG_SERVER && millis() - prevRetrievalTime > (retrievalIntervalInMinutes * 60000)) {
+            Serial.println("Trying to get config from server...");
+            int tries = 0;
+            while (tries < SERVER_RETRIES) {
+                if (!getConfigFromServer()) {
+                    Serial.printf("Tries: %i\n", tries);
+                    tries++;
+                    delay(1000);
+                } else {
+                    tries = SERVER_RETRIES;
+                }
+            }
+            prevRetrievalTime = millis();
+        }
+
         int receivedData;
         if (fanController->get(&receivedData)) {
             Serial.printf("Received from fan controller: %i\n", receivedData);
@@ -250,13 +277,13 @@ struct DEV_Thermostat : Service::Thermostat {
 
             case COOLING:
 
-                toSend = mapFloat(
+                toSend = constrain(mapFloat(
                     thisCurrentTemperature->getVal(),
                     thisTargetTemperature->getVal(),
-                    thisTargetTemperature->getVal() + maxTempDelta,
-                    minFanSpeed,
+                    thisTargetTemperature->getVal() + maxCoolingTempDelta,
+                    minimumFanSpeed,
                     100
-                    );
+                    ), minimumFanSpeed, 100);
 
                 break;
 
@@ -265,8 +292,8 @@ struct DEV_Thermostat : Service::Thermostat {
                 toSend = mapFloat(
                     thisCurrentTemperature->getVal(),
                     thisTargetTemperature->getVal(),
-                    thisTargetTemperature->getVal() - maxTempDelta,
-                    minFanSpeed,
+                    thisTargetTemperature->getVal() - maxHeatingTempDelta,
+                    minimumFanSpeed,
                     100
                     );
  
@@ -287,5 +314,54 @@ struct DEV_Thermostat : Service::Thermostat {
         const float rise = out_max - out_min;
         const float delta = x - in_min;
         return (delta * rise) / run + out_min;
+    }
+
+    boolean getConfigFromServer() {
+        WiFiClient wifiClient;
+        if (WiFi.status() == WL_CONNECTED) {
+
+            HttpClient http = HttpClient(wifiClient, configServerName, 80);
+            http.setTimeout(1000);
+
+            // Make an HTTP GET request
+            http.get(configEndpoint);
+            int httpResponseCode = http.responseStatusCode();
+
+            // Check if the GET request was successful
+            if (httpResponseCode > 0) {
+                String payload = http.responseBody();  // Get the response payload
+                Serial.println("HTTP Response code: " + String(httpResponseCode));
+                Serial.println("Received payload: " + payload);
+
+                // Parse the JSON using ArduinoJson
+                JsonDocument doc;
+                DeserializationError error = deserializeJson(doc, payload);
+
+                // Check for errors in parsing the JSON
+                if (!error) {
+                    // Extract values from JSON and assign to variables
+
+                    retrievalIntervalInMinutes = doc["retrievalIntervalInMinutes"].as<int>();
+                    minimumFanSpeed = doc["minimumFanSpeed"].as<int>();
+                    maxCoolingTempDelta = doc["maxCoolingTempDelta"].as<int>();
+                    maxHeatingTempDelta = doc["maxHeatingTempDelta"].as<int>();
+
+                    // Print the values to Serial Monitor
+                    Serial.printf("retrievalIntervalInMinutes: %i\n",retrievalIntervalInMinutes);
+                    Serial.printf("minimumFanSpeed: %i\n", minimumFanSpeed);
+                    Serial.printf("maxCoolingTempDelta: %i\n", maxCoolingTempDelta);
+                    Serial.printf("maxHeatingTempDelta: %i\n", maxHeatingTempDelta);
+                    return true;
+                } else {
+                    Serial.print("Failed to parse JSON: ");
+                    Serial.println(error.c_str());
+                }
+            } else {
+                Serial.print("Error in HTTP request: ");
+                Serial.println(httpResponseCode);
+            }
+            return false;
+        }
+        return false;
     }
 };

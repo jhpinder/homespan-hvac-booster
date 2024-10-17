@@ -42,3 +42,30 @@ HomeSpan has a `SpanPoint` object for communication between ESP32 boards without
 AC Infinity CLOUDLINE PRO S6 is controlled by a 10VDC PWM signal. The ESP32 supplies 3.3VDC so an L298N is required to pull up and down the signal to the 10VDC level. When a duty cycle of 100% is applied, the fan is turned off. When a 0% duty cycle is applied, the fan runs at 100% speed.
 
 The ESP32 is a `HomeSpan` `SpanPoint` node and receives a float from the thermostat every time the fan speed is changed. It constrains the values from 0 to the max PWM value based on the bit depth and reverses the duty cycle.
+
+
+
+## Device Info
+
+### Erin's Office
+#### MAC Addresses:
+- Thermostat: `C8:2E:18:26:BE:00`
+- Fan controller: `C8:2E:18:26:AE:84`
+
+---
+### James' Office
+#### MAC Addresses:
+- Thermostat:
+- Fan controller:
+
+---
+### Main Bedroom
+#### MAC Addresses:
+- Thermostat:
+- Fan controller:
+
+---
+### Guest Bedroom
+#### MAC Addresses:
+- Thermostat:
+- Fan controller:
